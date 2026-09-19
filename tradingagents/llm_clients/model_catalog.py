@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .opencode_go_models import get_opencode_go_model_options
+
 ModelOption = tuple[str, str]
 ProviderModeOptions = dict[str, dict[str, list[ModelOption]]]
 
@@ -221,6 +223,12 @@ MODEL_OPTIONS: ProviderModeOptions = {
     "nvidia": _CUSTOM_ONLY,
     # Bedrock model IDs / cross-region inference profile IDs are user-specified.
     "bedrock": _CUSTOM_ONLY,
+    # Go models use three documented wire protocols. Keep the picker strict so
+    # an arbitrary custom ID is never sent through a guessed protocol.
+    "opencode_go": {
+        "quick": get_opencode_go_model_options(),
+        "deep": get_opencode_go_model_options(),
+    },
 }
 
 

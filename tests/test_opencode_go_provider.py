@@ -1,0 +1,334 @@
+"""Simulated contract tests for the OpenCode Go provider.
+
+These tests never call OpenCode, Zen, another LLM provider, or financial data.
+They use constructors and an in-process HTTP mock only.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import httpx
+import pytest
+from pydantic import BaseModel
+
+try:  # Anthropic SDK 0.8x uses its vendored-compatible httpx2 transport.
+    import httpx2
+except ModuleNotFoundError:  # Older supported Anthropic SDKs use httpx itself.
+    httpx2 = httpx
+
+from cli.utils import _llm_provider_table
+from tradingagents.llm_clients.api_key_env import get_api_key_env
+from tradingagents.llm_clients.factory import create_llm_client
+from tradingagents.llm_clients.model_catalog import get_model_options
+from tradingagents.llm_clients.opencode_go_client import (
+    OPENCODE_GO_ANTHROPIC_API_BASE_URL,
+    OPENCODE_GO_API_BASE_URL,
+    OPENCODE_GO_MODELS,
+    OPENCODE_GO_USER_AGENT,
+    OpenCodeGoAuthenticationError,
+    OpenCodeGoClient,
+    OpenCodeGoConfigurationError,
+    OpenCodeGoQuotaError,
+    classify_opencode_go_error,
+)
+from tradingagents.llm_clients.validators import validate_model
+
+
+class _FakeOpenAIProtocolClient:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+    def bind_tools(self, tools):
+        return ("tools", tools)
+
+    def with_structured_output(self, schema):
+        return ("structured", schema)
+
+
+class _FakeAnthropicProtocolClient(_FakeOpenAIProtocolClient):
+    pass
+
+
+class _Decision(BaseModel):
+    rating: str
+
+
+@dataclass
+class _FakeStatusError(Exception):
+    status_code: int
+    message: str
+
+    def __str__(self) -> str:
+        return self.message
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("model", "protocol"),
+    [
+        ("glm-5.3-flash", "chat_completions"),
+        ("gpt-5.6-luna", "responses"),
+        ("qwen3.8-flash", "messages"),
+    ],
+)
+def test_official_go_models_have_an_explicit_protocol(model, protocol):
+    assert OPENCODE_GO_MODELS[model].protocol == protocol
+
+
+@pytest.mark.unit
+def test_go_model_catalog_is_strict_and_exposed_to_the_cli():
+    assert validate_model("opencode_go", "glm-5.3-flash") is True
+    assert validate_model("opencode_go", "not-a-go-model") is False
+    offered = {model for _, model in get_model_options("opencode_go", "quick")}
+    assert "glm-5.3-flash" in offered
+    assert "custom" not in offered
+
+
+@pytest.mark.unit
+def test_go_key_has_its_own_environment_variable():
+    assert get_api_key_env("opencode_go") == "OPENCODE_GO_API_KEY"
+
+
+@pytest.mark.unit
+def test_go_is_an_explicit_cli_provider_choice():
+    assert ("OpenCode Go", "opencode_go", OPENCODE_GO_API_BASE_URL) in _llm_provider_table()
+
+
+@pytest.mark.unit
+def test_factory_selects_go_without_selecting_another_provider():
+    client = create_llm_client("opencode_go", "glm-5.3-flash")
+    assert isinstance(client, OpenCodeGoClient)
+
+
+@pytest.mark.unit
+def test_missing_go_key_fails_before_constructing_a_protocol_client(monkeypatch):
+    import tradingagents.llm_clients.opencode_go_client as go
+
+    monkeypatch.delenv("OPENCODE_GO_API_KEY", raising=False)
+    monkeypatch.setattr(
+        go,
+        "OpenCodeGoChatOpenAI",
+        lambda **_: pytest.fail("a missing key must not construct a network client"),
+    )
+
+    with pytest.raises(OpenCodeGoConfigurationError, match="OPENCODE_GO_API_KEY"):
+        OpenCodeGoClient("glm-5.3-flash", session_id="run-1").get_llm()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("model", "expected_type", "responses", "expected_base_url"),
+    [
+        ("glm-5.3-flash", _FakeOpenAIProtocolClient, False, OPENCODE_GO_API_BASE_URL),
+        ("gpt-5.6-luna", _FakeOpenAIProtocolClient, True, OPENCODE_GO_API_BASE_URL),
+        ("qwen3.8-flash", _FakeAnthropicProtocolClient, False, OPENCODE_GO_ANTHROPIC_API_BASE_URL),
+    ],
+)
+def test_protocol_constructor_uses_honest_identity_and_stable_session(
+    monkeypatch, model, expected_type, responses, expected_base_url
+):
+    import tradingagents.llm_clients.opencode_go_client as go
+
+    monkeypatch.setenv("OPENCODE_GO_API_KEY", "fake-go-key")
+    monkeypatch.setattr(go, "OpenCodeGoChatOpenAI", _FakeOpenAIProtocolClient)
+    monkeypatch.setattr(go, "OpenCodeGoChatAnthropic", _FakeAnthropicProtocolClient)
+
+    llm = OpenCodeGoClient(model, session_id="stable-run-id").get_llm()
+
+    assert isinstance(llm, expected_type)
+    assert llm.kwargs["base_url"] == expected_base_url
+    assert llm.kwargs["default_headers"] == {
+        "User-Agent": OPENCODE_GO_USER_AGENT,
+        "x-opencode-session": "stable-run-id",
+    }
+    assert llm.kwargs["api_key"] == "fake-go-key"
+    assert llm.kwargs["max_retries"] == 0
+    assert llm.kwargs.get("use_responses_api", False) is responses
+
+
+@pytest.mark.unit
+def test_go_protocol_clients_retain_tool_and_structured_output_methods(monkeypatch):
+    import tradingagents.llm_clients.opencode_go_client as go
+
+    monkeypatch.setenv("OPENCODE_GO_API_KEY", "fake-go-key")
+    monkeypatch.setattr(go, "OpenCodeGoChatOpenAI", _FakeOpenAIProtocolClient)
+
+    llm = OpenCodeGoClient("glm-5.3-flash", session_id="run-1").get_llm()
+
+    assert llm.bind_tools(["market_tool"]) == ("tools", ["market_tool"])
+    assert llm.with_structured_output(dict) == ("structured", dict)
+
+
+@pytest.mark.unit
+def test_go_rejects_a_custom_backend_before_constructing_a_protocol_client(monkeypatch):
+    import tradingagents.llm_clients.opencode_go_client as go
+
+    monkeypatch.setenv("OPENCODE_GO_API_KEY", "fake-go-key")
+    monkeypatch.setattr(
+        go,
+        "OpenCodeGoChatOpenAI",
+        lambda **_: pytest.fail("Go must never redirect to another backend"),
+    )
+
+    with pytest.raises(OpenCodeGoConfigurationError, match="custom backend_url"):
+        OpenCodeGoClient(
+            "glm-5.3-flash",
+            base_url="https://api.example.invalid/v1",
+            session_id="simulated-run",
+        ).get_llm()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("model", ["glm-5.3-flash", "gpt-5.6-luna", "qwen3.8-flash"])
+def test_real_protocol_adapters_build_tool_and_structured_runnables_without_network(monkeypatch, model):
+    monkeypatch.setenv("OPENCODE_GO_API_KEY", "fake-go-key")
+
+    llm = OpenCodeGoClient(model, session_id="simulated-run").get_llm()
+
+    assert llm.bind_tools([]) is not None
+    assert llm.with_structured_output(_Decision) is not None
+
+
+@pytest.mark.unit
+def test_graph_reuses_one_go_session_for_quick_and_deep_clients():
+    from tradingagents.graph.trading_graph import TradingAgentsGraph
+
+    graph = TradingAgentsGraph.__new__(TradingAgentsGraph)
+    graph.config = {"llm_provider": "opencode_go", "llm_max_retries": 8}
+
+    first = graph._get_provider_kwargs()
+    second = graph._get_provider_kwargs()
+
+    assert first["opencode_go_session_id"]
+    assert first["opencode_go_session_id"] == second["opencode_go_session_id"]
+    assert "max_retries" not in first
+
+
+@pytest.mark.unit
+def test_every_ai_role_receives_the_selected_quick_or_deep_llm(monkeypatch):
+    """Graph construction never selects a provider outside its two input LLMs."""
+    import tradingagents.graph.setup as graph_setup
+    from tradingagents.graph.conditional_logic import ConditionalLogic
+    from tradingagents.graph.reflection import Reflector
+
+    quick_llm = object()
+    deep_llm = object()
+    received: dict[str, object] = {}
+
+    def record(name):
+        def factory(llm):
+            received[name] = llm
+            return lambda state: state
+
+        return factory
+
+    for name in (
+        "create_market_analyst",
+        "create_sentiment_analyst",
+        "create_news_analyst",
+        "create_fundamentals_analyst",
+        "create_bull_researcher",
+        "create_bear_researcher",
+        "create_research_manager",
+        "create_trader",
+        "create_aggressive_debator",
+        "create_neutral_debator",
+        "create_conservative_debator",
+        "create_portfolio_manager",
+    ):
+        monkeypatch.setattr(graph_setup, name, record(name))
+    monkeypatch.setattr(graph_setup, "create_msg_delete", lambda: lambda state: state)
+
+    graph_setup.GraphSetup(
+        quick_llm,
+        deep_llm,
+        {key: lambda state: state for key in ("market", "social", "news", "fundamentals")},
+        ConditionalLogic(1, 1),
+    ).setup_graph()
+
+    quick_roles = {
+        "create_market_analyst",
+        "create_sentiment_analyst",
+        "create_news_analyst",
+        "create_fundamentals_analyst",
+        "create_bull_researcher",
+        "create_bear_researcher",
+        "create_trader",
+        "create_aggressive_debator",
+        "create_neutral_debator",
+        "create_conservative_debator",
+    }
+    assert {received[name] for name in quick_roles} == {quick_llm}
+    assert received["create_research_manager"] is deep_llm
+    assert received["create_portfolio_manager"] is deep_llm
+    assert Reflector(quick_llm).quick_thinking_llm is quick_llm
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("status", "exception_type", "text"),
+    [
+        (401, OpenCodeGoAuthenticationError, "authentication"),
+        (403, OpenCodeGoAuthenticationError, "authentication"),
+        (429, OpenCodeGoQuotaError, "quota"),
+    ],
+)
+def test_auth_and_quota_errors_are_redacted_and_do_not_name_a_fallback(
+    status, exception_type, text
+):
+    error = classify_opencode_go_error(
+        _FakeStatusError(status, "Bearer fake-go-key was rejected")
+    )
+
+    assert isinstance(error, exception_type)
+    assert text in str(error).lower()
+    assert "fake-go-key" not in str(error)
+    assert "zen" not in str(error).lower()
+    assert "openai" not in str(error).lower()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("model", "endpoint", "credential_header"),
+    [
+        ("glm-5.3-flash", "/chat/completions", "authorization"),
+        ("gpt-5.6-luna", "/responses", "authorization"),
+        ("qwen3.8-flash", "/messages", "x-api-key"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("status", "exception_type"),
+    [(401, OpenCodeGoAuthenticationError), (429, OpenCodeGoQuotaError)],
+)
+def test_simulated_protocol_errors_are_mapped_without_external_connections(
+    monkeypatch, model, endpoint, credential_header, status, exception_type
+):
+    monkeypatch.setenv("OPENCODE_GO_API_KEY", "fake-go-key")
+    requests = []
+
+    def fake_go_gateway(request):
+        requests.append(request)
+        response_cls = httpx2.Response if credential_header == "x-api-key" else httpx.Response
+        return response_cls(status, request=request, json={"error": {"message": "hidden"}})
+
+    transport_cls = httpx2.MockTransport if credential_header == "x-api-key" else httpx.MockTransport
+    client_cls = httpx2.Client if credential_header == "x-api-key" else httpx.Client
+    transport = transport_cls(fake_go_gateway)
+    llm = OpenCodeGoClient(
+        model,
+        session_id="simulated-run",
+        http_client=client_cls(transport=transport),
+    ).get_llm()
+
+    with pytest.raises(exception_type):
+        llm.invoke("simulated provider request")
+
+    assert len(requests) == 1
+    assert str(requests[0].url) == f"{OPENCODE_GO_API_BASE_URL}{endpoint}"
+    assert requests[0].headers["x-opencode-session"] == "simulated-run"
+    assert requests[0].headers["user-agent"] == OPENCODE_GO_USER_AGENT
+    if credential_header == "authorization":
+        assert requests[0].headers[credential_header] == "Bearer fake-go-key"
+    else:
+        assert requests[0].headers[credential_header] == "fake-go-key"

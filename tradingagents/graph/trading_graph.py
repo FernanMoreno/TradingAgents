@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -199,6 +200,18 @@ class TradingAgentsGraph:
             if effort:
                 kwargs["effort"] = effort
 
+        elif provider == "opencode_go":
+            # Both LLMs are created once and then shared by the full graph, so
+            # this ID remains stable through analysts, debates, managers, risk,
+            # reflection, and final result processing.
+            session_id = self.config.get("opencode_go_session_id")
+            if not session_id:
+                session_id = getattr(self, "_opencode_go_session_id", None)
+            if not session_id:
+                session_id = uuid.uuid4().hex
+            self._opencode_go_session_id = str(session_id)
+            kwargs["opencode_go_session_id"] = self._opencode_go_session_id
+
         # Sampling temperature is cross-provider: forward it whenever set.
         # float() here so a value coming from a TRADINGAGENTS_TEMPERATURE env
         # string ("0.2") works the same as a programmatic float.
@@ -206,10 +219,10 @@ class TradingAgentsGraph:
         if temperature is not None and temperature != "":
             kwargs["temperature"] = float(temperature)
 
-        # SDK retry budget is cross-provider. Forward it only when explicitly set
-        # so each provider keeps its own default (usually 2) otherwise (#1091).
+        # SDK retry budget is cross-provider except for OpenCode Go: a Go 429
+        # must stop immediately rather than consuming further retry requests.
         max_retries = self.config.get("llm_max_retries")
-        if max_retries is not None and max_retries != "":
+        if provider != "opencode_go" and max_retries is not None and max_retries != "":
             kwargs["max_retries"] = _coerce_max_retries(max_retries)
 
         # Output-token cap is cross-provider, but Gemini names it
