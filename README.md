@@ -187,26 +187,40 @@ processing call uses that one provider selection.
 
 OpenCode documents different protocols for different Go models. TradingAgents maps
 each reviewed model to its documented Chat Completions, Responses, or Messages
-endpoint and rejects unknown IDs rather than guessing. It sends the honest user-agent
+endpoint and rejects unknown IDs rather than guessing. The Messages branch sends
+HTTP directly to Go; it does not instantiate the Anthropic SDK or select the
+Anthropic provider. It sends the honest user-agent
 `tradingagents/0.5.0` and one stable `x-opencode-session` per run. It does not fall
 back to another endpoint, model, or provider after an error. A Go quota or rate-limit
 response stops the run after that one request; `TRADINGAGENTS_LLM_MAX_RETRIES` is
 intentionally not applied to Go.
+
+Messages-model capabilities are explicit. `minimax-m3` has simulated coverage for
+ordinary tools and forced schema tools, so it can produce typed manager results.
+`qwen3.8-flash` supports ordinary tools but does not receive forced schema tools:
+the existing manager/trader fallback makes a plain Go request instead. Other Messages
+models remain conservative until their tool behavior is reviewed. This never changes
+provider; use `minimax-m3` for both quick and deep roles if typed results are required
+at every stage.
 
 PowerShell example (use your own key; do not paste it into source files):
 
 ```powershell
 $env:OPENCODE_GO_API_KEY = "your-go-api-key"
 $env:TRADINGAGENTS_LLM_PROVIDER = "opencode_go"
-$env:TRADINGAGENTS_QUICK_THINK_LLM = "glm-5.3-flash"
-$env:TRADINGAGENTS_DEEP_THINK_LLM = "kimi-k3"
+$env:TRADINGAGENTS_QUICK_THINK_LLM = "minimax-m3"
+$env:TRADINGAGENTS_DEEP_THINK_LLM = "minimax-m3"
 tradingagents
 ```
 
-Go's public documentation describes coding-agent traffic and validates coding clients;
-it does not expressly validate this financial-research workload. This is documented as
-an external terms/use follow-up, not as a technical execution block, hidden fallback,
-or client disguise.
+The Go documentation describes the service for coding agents and requests that clients
+send their own user agent and a stable session ID. TradingAgents complies by identifying
+itself as `tradingagents/0.5.0`; it neither impersonates a validated client nor blocks
+the selected Go request in code. The user remains responsible for ensuring their actual
+workload complies with their OpenCode account terms. Go's console also has an account-
+level “Use balance” setting that can continue service with Zen balance after Go limits;
+disable that setting there if no paid continuation is wanted. TradingAgents itself never
+switches endpoint, key, model, or provider.
 
 Alternatively, copy `.env.example` to `.env` and fill in your keys:
 ```bash

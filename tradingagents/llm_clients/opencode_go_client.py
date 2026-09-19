@@ -8,26 +8,22 @@ product/a different provider after a failure.
 from __future__ import annotations
 
 import os
-from functools import cached_property
 from typing import Any
 
-from anthropic import Anthropic, AsyncAnthropic
-
-from .anthropic_client import NormalizedChatAnthropic
 from .base_client import BaseLLMClient
 from .openai_client import NormalizedChatOpenAI
+from .opencode_go_messages import OpenCodeGoMessages
 from .opencode_go_models import OPENCODE_GO_MODELS, OpenCodeGoModelSpec
 
 OPENCODE_GO_API_BASE_URL = "https://opencode.ai/zen/go/v1"
-# ChatAnthropic adds ``/v1/messages`` to its base URL, unlike the OpenAI
-# clients that receive the documented Go v1 URL directly.
-OPENCODE_GO_ANTHROPIC_API_BASE_URL = "https://opencode.ai/zen/go"
 OPENCODE_GO_API_KEY_ENV = "OPENCODE_GO_API_KEY"
 OPENCODE_GO_USER_AGENT = "tradingagents/0.5.0"
 
 
 class OpenCodeGoError(RuntimeError):
     """Base error for a Go request that must not trigger provider fallback."""
+
+    is_terminal_provider_error = True
 
 
 class OpenCodeGoConfigurationError(OpenCodeGoError):
@@ -85,31 +81,6 @@ class _OpenCodeGoErrorMixin:
 
 class OpenCodeGoChatOpenAI(_OpenCodeGoErrorMixin, NormalizedChatOpenAI):
     """OpenAI-compatible Go client for Chat Completions and Responses models."""
-
-
-class OpenCodeGoChatAnthropic(_OpenCodeGoErrorMixin, NormalizedChatAnthropic):
-    """Anthropic-compatible Go client for documented Messages models.
-
-    LangChain's current ``ChatAnthropic`` creates its own HTTP transports and
-    does not expose injection fields.  Declaring them here preserves the same
-    controllable-transport contract as the OpenAI-compatible adapters, which
-    is useful for callers with managed transport and for offline tests.
-    """
-
-    http_client: Any | None = None
-    http_async_client: Any | None = None
-
-    @cached_property
-    def _client(self) -> Anthropic:
-        if self.http_client is None:
-            return super()._client
-        return Anthropic(**self._client_params, http_client=self.http_client)
-
-    @cached_property
-    def _async_client(self) -> AsyncAnthropic:
-        if self.http_async_client is None:
-            return super()._async_client
-        return AsyncAnthropic(**self._client_params, http_client=self.http_async_client)
 
 
 _PASSTHROUGH_KWARGS = (
@@ -191,8 +162,14 @@ class OpenCodeGoClient(BaseLLMClient):
         if spec.protocol == "responses":
             return OpenCodeGoChatOpenAI(use_responses_api=True, **kwargs)
         if spec.protocol == "messages":
-            kwargs["base_url"] = OPENCODE_GO_ANTHROPIC_API_BASE_URL
-            return OpenCodeGoChatAnthropic(**kwargs)
+            kwargs["base_url"] = f"{OPENCODE_GO_API_BASE_URL}/messages"
+            return OpenCodeGoMessages(
+                **kwargs,
+                supports_tools=spec.supports_tools,
+                supports_forced_tool_choice=spec.supports_forced_tool_choice,
+                supports_structured_output=spec.supports_structured_output,
+                error_classifier=classify_opencode_go_error,
+            )
         raise OpenCodeGoConfigurationError(
             f"OpenCode Go model {self.model!r} has an unsupported protocol {spec.protocol!r}."
         )

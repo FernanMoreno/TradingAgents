@@ -18,6 +18,9 @@ class OpenCodeGoModelSpec:
     """One Go model and the request protocol documented for it."""
 
     protocol: OpenCodeGoProtocol
+    supports_tools: bool = False
+    supports_forced_tool_choice: bool = False
+    supports_structured_output: bool = False
 
 
 # Source: https://opencode.ai/docs/go/ (reviewed 2026-09-19).
@@ -43,11 +46,15 @@ OPENCODE_GO_MODELS: dict[str, OpenCodeGoModelSpec] = {
     "mimo-v2.5-pro": OpenCodeGoModelSpec("chat_completions"),
     "hy4-preview": OpenCodeGoModelSpec("chat_completions"),
     "hy3": OpenCodeGoModelSpec("chat_completions"),
-    "minimax-m3": OpenCodeGoModelSpec("messages"),
+    # Direct simulated contract coverage and a neutral live protocol probe
+    # confirm this exact model accepts normal tools and a named tool choice.
+    "minimax-m3": OpenCodeGoModelSpec("messages", True, True, True),
     "minimax-m2.7": OpenCodeGoModelSpec("messages"),
     "minimax-m2.5": OpenCodeGoModelSpec("messages"),
     "qwen3.8-max": OpenCodeGoModelSpec("messages"),
-    "qwen3.8-flash": OpenCodeGoModelSpec("messages"),
+    # Qwen accepts ordinary tools, but the neutral live probe returned HTTP
+    # 400 for a named forced tool. Do not infer that Minimax capability here.
+    "qwen3.8-flash": OpenCodeGoModelSpec("messages", True, False, False),
     "qwen3.7-max": OpenCodeGoModelSpec("messages"),
     "qwen3.7-plus": OpenCodeGoModelSpec("messages"),
     "qwen3.6-plus": OpenCodeGoModelSpec("messages"),

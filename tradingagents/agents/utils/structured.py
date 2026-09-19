@@ -8,9 +8,10 @@ canonical pattern:
    not support structured output (rare; mostly older Ollama models), the
    wrap is skipped and the agent uses free-text generation instead.
 2. At invocation, run the structured call and render the result back to
-   markdown. If the structured call itself fails for any reason
-   (malformed JSON from a weak model, transient provider issue), fall
-   back to a plain ``llm.invoke`` so the pipeline never blocks.
+   markdown. If a non-terminal structured call fails (for example, malformed
+   JSON from a weak model), fall back to a plain ``llm.invoke``. Provider
+   errors explicitly marked terminal stop instead, so a quota or
+   authentication error is never retried as free text.
 
 Centralising the pattern here keeps the agent factories small and ensures
 all three agents log the same warnings when fallback fires.
@@ -80,6 +81,8 @@ def invoke_structured_or_freetext(
                 raise ValueError("structured output returned no parsed result")
             return render(result)
         except Exception as exc:
+            if getattr(exc, "is_terminal_provider_error", False):
+                raise
             logger.warning(
                 "%s: structured-output invocation failed (%s); retrying once as free text",
                 agent_name, exc,
