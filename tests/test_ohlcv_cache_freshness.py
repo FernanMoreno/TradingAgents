@@ -8,6 +8,7 @@ day (#1330).
 from __future__ import annotations
 
 import os
+import time
 
 import pandas as pd
 import pytest
@@ -21,7 +22,11 @@ STALE = su.OHLCV_CACHE_TTL_SECONDS + 60
 def _write(tmp_path, name="AAPL-YFin-data.csv", age_seconds=0.0, last_date="2026-07-17"):
     f = tmp_path / name
     pd.DataFrame({"Date": [last_date], "Close": [100.0]}).to_csv(f, index=False)
-    written = NOW.timestamp() - age_seconds
+    # _cache_is_fresh reads a local timestamp with fromtimestamp(), so build
+    # the mtime in the same local-time convention. Timestamp.timestamp() treats
+    # this naive fixture as UTC on some platforms, which made TTL tests depend
+    # on the runner's timezone.
+    written = time.mktime((NOW - pd.Timedelta(seconds=age_seconds)).timetuple())
     os.utime(f, (written, written))
     return f
 
