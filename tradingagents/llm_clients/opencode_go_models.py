@@ -63,9 +63,24 @@ OPENCODE_GO_MODELS: dict[str, OpenCodeGoModelSpec] = {
 }
 
 
-def get_opencode_go_model_options() -> list[tuple[str, str]]:
-    """Return the fixed, protocol-labelled Go model picker options."""
+def is_opencode_go_quick_model_compatible(model: str) -> bool:
+    """Whether a reviewed model can serve tool-enabled Quick analyst roles.
+
+    Unknown IDs deliberately pass through so OpenCodeGoClient remains the
+    established owner of strict unknown-model errors and protocol validation.
+    """
+    spec = OPENCODE_GO_MODELS.get(model)
+    return spec is None or spec.protocol != "messages" or spec.supports_tools
+
+
+def get_opencode_go_model_options(
+    mode: Literal["quick", "deep"] = "deep",
+) -> list[tuple[str, str]]:
+    """Return fixed, protocol-labelled Go options for one thinking role."""
+    if mode not in {"quick", "deep"}:
+        raise ValueError(f"Unsupported OpenCode Go thinking mode: {mode!r}")
     return [
         (f"{model_id} ({spec.protocol.replace('_', ' ')})", model_id)
         for model_id, spec in OPENCODE_GO_MODELS.items()
+        if mode != "quick" or is_opencode_go_quick_model_compatible(model_id)
     ]

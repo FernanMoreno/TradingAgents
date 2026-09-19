@@ -22,6 +22,7 @@ try:  # Anthropic SDK 0.8x uses its vendored-compatible httpx2 transport.
 except ModuleNotFoundError:  # Older supported Anthropic SDKs use httpx itself.
     httpx2 = httpx
 
+from cli.prefs import sanitize
 from cli.utils import _llm_provider_table
 from tradingagents.agents.utils.structured import bind_structured
 from tradingagents.llm_clients.api_key_env import get_api_key_env
@@ -90,6 +91,81 @@ def test_go_model_catalog_is_strict_and_exposed_to_the_cli():
     offered = {model for _, model in get_model_options("opencode_go", "quick")}
     assert "glm-5.3-flash" in offered
     assert "custom" not in offered
+
+
+@pytest.mark.unit
+def test_go_quick_catalog_excludes_messages_models_without_ordinary_tools():
+    """A menu selection must not reach the analyst tool-binding failure."""
+    no_tool_messages_models = {
+        "minimax-m2.7",
+        "minimax-m2.5",
+        "qwen3.8-max",
+        "qwen3.7-max",
+        "qwen3.7-plus",
+        "qwen3.6-plus",
+    }
+
+    quick = {model for _, model in get_model_options("opencode_go", "quick")}
+    deep = {model for _, model in get_model_options("opencode_go", "deep")}
+
+    assert no_tool_messages_models.isdisjoint(quick)
+    assert no_tool_messages_models <= deep
+    assert {"minimax-m3", "qwen3.8-flash"} <= quick
+
+
+@pytest.mark.unit
+def test_saved_go_quick_model_without_tools_is_not_reused():
+    saved = {
+        "llm_provider": "opencode_go",
+        "quick_think_llm": "qwen3.7-plus",
+        "deep_think_llm": "qwen3.7-plus",
+    }
+
+    restored = sanitize(saved, "stock")
+
+    assert "quick_think_llm" not in restored
+    assert restored["deep_think_llm"] == "qwen3.7-plus"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "model",
+    [
+        "minimax-m2.7",
+        "minimax-m2.5",
+        "qwen3.8-max",
+        "qwen3.7-max",
+        "qwen3.7-plus",
+        "qwen3.6-plus",
+    ],
+)
+def test_go_quick_model_without_tools_fails_before_graph_initialization(monkeypatch, model):
+    """Direct or environment configuration must fail before any startup work."""
+    import tradingagents.graph.trading_graph as graph_module
+
+    config = {
+        "llm_provider": "opencode_go",
+        "quick_think_llm": model,
+        "deep_think_llm": "minimax-m3",
+    }
+    monkeypatch.setattr(
+        graph_module,
+        "set_config",
+        lambda _: pytest.fail("invalid Go quick configuration changed shared configuration"),
+    )
+    monkeypatch.setattr(
+        graph_module.os,
+        "makedirs",
+        lambda *_args, **_kwargs: pytest.fail("invalid Go quick configuration created a directory"),
+    )
+    monkeypatch.setattr(
+        graph_module,
+        "create_llm_client",
+        lambda **_kwargs: pytest.fail("invalid Go quick configuration built an AI client"),
+    )
+
+    with pytest.raises(OpenCodeGoConfigurationError, match="quick_think_llm.*ordinary tools"):
+        graph_module.TradingAgentsGraph(config=config)
 
 
 @pytest.mark.unit

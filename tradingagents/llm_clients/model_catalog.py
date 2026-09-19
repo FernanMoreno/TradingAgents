@@ -226,8 +226,8 @@ MODEL_OPTIONS: ProviderModeOptions = {
     # Go models use three documented wire protocols. Keep the picker strict so
     # an arbitrary custom ID is never sent through a guessed protocol.
     "opencode_go": {
-        "quick": get_opencode_go_model_options(),
-        "deep": get_opencode_go_model_options(),
+        "quick": get_opencode_go_model_options("quick"),
+        "deep": get_opencode_go_model_options("deep"),
     },
 }
 

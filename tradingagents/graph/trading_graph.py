@@ -34,6 +34,9 @@ from tradingagents.dataflows.config import set_config
 from tradingagents.dataflows.utils import get_current_date, safe_ticker_component
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.llm_clients import create_llm_client
+from tradingagents.llm_clients.opencode_go_models import (
+    is_opencode_go_quick_model_compatible,
+)
 from tradingagents.reporting import write_report_tree
 
 from .checkpointer import checkpoint_step, clear_checkpoint, get_checkpointer, thread_id
@@ -91,6 +94,30 @@ def _coerce_max_tokens(value):
     return n
 
 
+def _validate_opencode_go_quick_model(config: dict[str, Any]) -> None:
+    """Reject a reviewed Go Quick model that cannot bind analyst tools.
+
+    Unknown IDs are intentionally left to OpenCodeGoClient, which owns the
+    strict protocol and model-identifier validation for the provider.
+    """
+    if config.get("llm_provider") != "opencode_go":
+        return
+    model = config.get("quick_think_llm")
+    if not isinstance(model, str) or is_opencode_go_quick_model_compatible(model):
+        return
+
+    # Keep the provider's terminal configuration error type without importing
+    # its client module for every non-Go graph construction.
+    from tradingagents.llm_clients.opencode_go_client import OpenCodeGoConfigurationError
+
+    raise OpenCodeGoConfigurationError(
+        f"OpenCode Go quick_think_llm {model!r} does not support the ordinary tools "
+        "required by quick-thinking analyst roles. Choose a tool-capable Go model "
+        "for quick_think_llm; this model remains valid as deep_think_llm. "
+        "The run stopped before initialization; no fallback was used."
+    )
+
+
 class TradingAgentsGraph:
     """Main class that orchestrates the trading agents framework."""
 
@@ -112,6 +139,8 @@ class TradingAgentsGraph:
         self.debug = debug
         self.config = config or DEFAULT_CONFIG
         self.callbacks = callbacks or []
+
+        _validate_opencode_go_quick_model(self.config)
 
         # Update the interface's config
         set_config(self.config)

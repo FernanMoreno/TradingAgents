@@ -199,9 +199,12 @@ Messages-model capabilities are explicit. `minimax-m3` has simulated coverage fo
 ordinary tools and forced schema tools, so it can produce typed manager results.
 `qwen3.8-flash` supports ordinary tools but does not receive forced schema tools:
 the existing manager/trader fallback makes a plain Go request instead. Other Messages
-models remain conservative until their tool behavior is reviewed. This never changes
-provider; use `minimax-m3` for both quick and deep roles if typed results are required
-at every stage.
+models remain conservative until their tool behavior is reviewed. Messages models
+without reviewed ordinary-tool support are offered only for the Deep role: Quick
+always drives tool-enabled analyst work. A stale environment, preference, or library
+setting that names one for Quick stops before graph initialization, without a request,
+provider change, Zen use, or fallback. This never changes provider; use `minimax-m3`
+for both Quick and Deep roles if typed results are required at every stage.
 
 PowerShell example (use your own key; do not paste it into source files):
 
