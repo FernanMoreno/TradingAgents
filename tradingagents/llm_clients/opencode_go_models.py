@@ -21,6 +21,7 @@ class OpenCodeGoModelSpec:
     supports_tools: bool = False
     supports_forced_tool_choice: bool = False
     supports_structured_output: bool = False
+    limited_regions: bool = False
 
 
 # Source: https://opencode.ai/docs/go/ (reviewed 2026-09-19).
@@ -28,8 +29,9 @@ class OpenCodeGoModelSpec:
 OPENCODE_GO_MODELS: dict[str, OpenCodeGoModelSpec] = {
     "grok-4.6": OpenCodeGoModelSpec("responses"),
     "gpt-5.6-luna": OpenCodeGoModelSpec("responses"),
-    "muse-spark-1.3-contributor": OpenCodeGoModelSpec("responses"),
-    "muse-spark-1.2-contributor": OpenCodeGoModelSpec("responses"),
+    # OpenCode documents both Muse Contributor models as region-limited.
+    "muse-spark-1.3-contributor": OpenCodeGoModelSpec("responses", limited_regions=True),
+    "muse-spark-1.2-contributor": OpenCodeGoModelSpec("responses", limited_regions=True),
     "glm-5.3-flash": OpenCodeGoModelSpec("chat_completions"),
     "glm-5.3": OpenCodeGoModelSpec("chat_completions"),
     "glm-5.2": OpenCodeGoModelSpec("chat_completions"),

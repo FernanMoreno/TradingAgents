@@ -34,6 +34,10 @@ class OpenCodeGoAuthenticationError(OpenCodeGoError):
     """Go rejected the configured authentication without exposing the key."""
 
 
+class OpenCodeGoModelAvailabilityError(OpenCodeGoError):
+    """Go denied access to a model whose availability is region-limited."""
+
+
 class OpenCodeGoQuotaError(OpenCodeGoError):
     """Go rate or usage limit was exhausted; the run must stop."""
 
@@ -48,13 +52,19 @@ def _status_code(error: Exception) -> int | None:
     return status if isinstance(status, int) else None
 
 
-def classify_opencode_go_error(error: Exception) -> Exception:
+def classify_opencode_go_error(error: Exception, *, model: str | None = None) -> Exception:
     """Map auth/quota HTTP errors to stable, redacted errors.
 
     Other errors preserve their original type and traceback. Error bodies are
     deliberately not interpolated because they may echo an authorization header.
     """
     status = _status_code(error)
+    if status == 403 and (spec := OPENCODE_GO_MODELS.get(model or "")) and spec.limited_regions:
+        return OpenCodeGoModelAvailabilityError(
+            f"OpenCode Go denied access to {model!r}. This model is documented as available only "
+            "in limited regions; check regional availability and subscription access. "
+            "The run stopped; no fallback was used."
+        )
     if status in (401, 403):
         return OpenCodeGoAuthenticationError(
             "OpenCode Go authentication failed. Check OPENCODE_GO_API_KEY and subscription access."
@@ -73,7 +83,7 @@ class _OpenCodeGoErrorMixin:
         try:
             return super().invoke(input, config, **kwargs)
         except Exception as error:
-            classified = classify_opencode_go_error(error)
+            classified = classify_opencode_go_error(error, model=self.model_name)
             if classified is error:
                 raise
             raise classified from error

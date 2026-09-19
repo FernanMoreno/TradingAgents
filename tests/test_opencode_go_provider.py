@@ -34,6 +34,7 @@ from tradingagents.llm_clients.opencode_go_client import (
     OpenCodeGoAuthenticationError,
     OpenCodeGoClient,
     OpenCodeGoConfigurationError,
+    OpenCodeGoModelAvailabilityError,
     OpenCodeGoQuotaError,
     classify_opencode_go_error,
 )
@@ -782,6 +783,31 @@ def test_auth_and_quota_errors_are_redacted_and_do_not_name_a_fallback(
     assert "fake-go-key" not in str(error)
     assert "zen" not in str(error).lower()
     assert "openai" not in str(error).lower()
+
+
+@pytest.mark.unit
+def test_muse_region_restriction_is_a_terminal_availability_error(monkeypatch):
+    """A model-specific 403 must not mislead users into rotating a valid Go key."""
+    monkeypatch.setenv("OPENCODE_GO_API_KEY", "fake-go-key")
+    requests = []
+
+    def fake_go_gateway(request):
+        requests.append(request)
+        return httpx.Response(403, request=request, json={"error": {"message": "hidden"}})
+
+    llm = OpenCodeGoClient(
+        "muse-spark-1.3-contributor",
+        session_id="simulated-run",
+        http_client=httpx.Client(transport=httpx.MockTransport(fake_go_gateway)),
+    ).get_llm()
+
+    with pytest.raises(OpenCodeGoModelAvailabilityError, match="limited regions") as error:
+        llm.invoke("simulated coding-agent request")
+
+    assert error.value.is_terminal_provider_error is True
+    assert "fake-go-key" not in str(error.value)
+    assert len(requests) == 1
+    assert str(requests[0].url) == f"{OPENCODE_GO_API_BASE_URL}/responses"
 
 
 @pytest.mark.unit
