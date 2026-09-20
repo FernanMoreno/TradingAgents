@@ -100,7 +100,8 @@ def _validate_opencode_go_quick_model(config: dict[str, Any]) -> None:
     Unknown IDs are intentionally left to OpenCodeGoClient, which owns the
     strict protocol and model-identifier validation for the provider.
     """
-    if config.get("llm_provider") != "opencode_go":
+    provider = config.get("llm_provider")
+    if not isinstance(provider, str) or provider.lower() != "opencode_go":
         return
     model = config.get("quick_think_llm")
     if not isinstance(model, str) or is_opencode_go_quick_model_compatible(model):

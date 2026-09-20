@@ -62,7 +62,13 @@ class OpenCodeGoMessages(BaseChatModel):
         if self.http_client is not None:
             return self.http_client
         if self._owned_client is None:
-            self._owned_client = httpx.Client(timeout=self.timeout)
+            # Passing timeout=None disables every HTTPX timeout phase. Omit the
+            # argument instead so HTTPX supplies its finite default; explicit
+            # caller-provided timeouts remain unchanged.
+            if self.timeout is None:
+                self._owned_client = httpx.Client()
+            else:
+                self._owned_client = httpx.Client(timeout=self.timeout)
         return self._owned_client
 
     @staticmethod

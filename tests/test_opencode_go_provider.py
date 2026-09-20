@@ -129,6 +129,10 @@ def test_saved_go_quick_model_without_tools_is_not_reused():
 
 @pytest.mark.unit
 @pytest.mark.parametrize(
+    "provider",
+    ["opencode_go", "OpenCode_Go"],
+)
+@pytest.mark.parametrize(
     "model",
     [
         "minimax-m2.7",
@@ -139,12 +143,14 @@ def test_saved_go_quick_model_without_tools_is_not_reused():
         "qwen3.6-plus",
     ],
 )
-def test_go_quick_model_without_tools_fails_before_graph_initialization(monkeypatch, model):
+def test_go_quick_model_without_tools_fails_before_graph_initialization(
+    monkeypatch, provider, model
+):
     """Direct or environment configuration must fail before any startup work."""
     import tradingagents.graph.trading_graph as graph_module
 
     config = {
-        "llm_provider": "opencode_go",
+        "llm_provider": provider,
         "quick_think_llm": model,
         "deep_think_llm": "minimax-m3",
     }
@@ -166,6 +172,55 @@ def test_go_quick_model_without_tools_fails_before_graph_initialization(monkeypa
 
     with pytest.raises(OpenCodeGoConfigurationError, match="quick_think_llm.*ordinary tools"):
         graph_module.TradingAgentsGraph(config=config)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "model",
+    [
+        "minimax-m3",
+        "minimax-m2.7",
+        "minimax-m2.5",
+        "qwen3.8-max",
+        "qwen3.8-flash",
+        "qwen3.7-max",
+        "qwen3.7-plus",
+        "qwen3.6-plus",
+    ],
+)
+def test_messages_default_transport_has_finite_timeouts(monkeypatch, model):
+    """An omitted timeout must not disable all transport deadline phases."""
+    monkeypatch.setenv("OPENCODE_GO_API_KEY", "fake-go-key")
+
+    llm = OpenCodeGoClient(model, session_id="simulated-run").get_llm()
+    client = llm._client()
+    try:
+        assert client.timeout.connect is not None
+        assert client.timeout.read is not None
+        assert client.timeout.write is not None
+        assert client.timeout.pool is not None
+    finally:
+        client.close()
+
+
+@pytest.mark.unit
+def test_messages_preserve_an_explicit_timeout(monkeypatch):
+    """A caller-selected finite timeout remains the direct transport timeout."""
+    monkeypatch.setenv("OPENCODE_GO_API_KEY", "fake-go-key")
+
+    llm = OpenCodeGoClient(
+        "minimax-m3",
+        session_id="simulated-run",
+        timeout=17.0,
+    ).get_llm()
+    client = llm._client()
+    try:
+        assert client.timeout.connect == 17.0
+        assert client.timeout.read == 17.0
+        assert client.timeout.write == 17.0
+        assert client.timeout.pool == 17.0
+    finally:
+        client.close()
 
 
 @pytest.mark.unit
