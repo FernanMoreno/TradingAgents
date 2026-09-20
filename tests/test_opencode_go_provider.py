@@ -224,6 +224,134 @@ def test_messages_preserve_an_explicit_timeout(monkeypatch):
 
 
 @pytest.mark.unit
+def test_messages_close_releases_an_owned_transport(monkeypatch):
+    """An adapter must release the private client it created after use."""
+    monkeypatch.setenv("OPENCODE_GO_API_KEY", "fake-go-key")
+    llm = OpenCodeGoClient("minimax-m3", session_id="simulated-run").get_llm()
+    client = llm._client()
+
+    llm.close()
+
+    assert client.is_closed
+    llm.close()  # Closing a completed run must be harmless.
+
+
+@pytest.mark.unit
+def test_messages_close_does_not_close_an_injected_transport(monkeypatch):
+    """The caller, not the adapter, owns an injected HTTP client."""
+    monkeypatch.setenv("OPENCODE_GO_API_KEY", "fake-go-key")
+    injected = httpx2.Client(transport=httpx2.MockTransport(lambda request: httpx2.Response(500, request=request)))
+    try:
+        llm = OpenCodeGoClient(
+            "minimax-m3",
+            session_id="simulated-run",
+            http_client=injected,
+        ).get_llm()
+
+        llm.close()
+
+        assert not injected.is_closed
+    finally:
+        injected.close()
+
+
+@pytest.mark.unit
+def test_graph_close_releases_each_unique_messages_llm(monkeypatch):
+    """Graph ownership must close direct Go clients once, even when shared."""
+    from tradingagents.graph.trading_graph import TradingAgentsGraph
+
+    monkeypatch.setenv("OPENCODE_GO_API_KEY", "fake-go-key")
+    llm = OpenCodeGoClient("minimax-m3", session_id="simulated-run").get_llm()
+    client = llm._client()
+    graph = TradingAgentsGraph.__new__(TradingAgentsGraph)
+    graph.quick_thinking_llm = llm
+    graph.deep_thinking_llm = llm
+    graph._checkpointer_ctx = None
+
+    graph.close()
+
+    assert client.is_closed
+    graph.close()
+
+
+@pytest.mark.unit
+def test_graph_close_deduplicates_shared_llms():
+    """Quick and deep roles may point at one client, which closes once."""
+    from tradingagents.graph.trading_graph import TradingAgentsGraph
+
+    class _ClosableLLM:
+        calls = 0
+
+        def close(self):
+            self.calls += 1
+
+    llm = _ClosableLLM()
+    graph = TradingAgentsGraph.__new__(TradingAgentsGraph)
+    graph.quick_thinking_llm = llm
+    graph.deep_thinking_llm = llm
+    graph._checkpointer_ctx = None
+
+    graph.close()
+
+    assert llm.calls == 1
+
+
+@pytest.mark.unit
+def test_graph_close_does_not_reclose_a_strict_llm():
+    """Graph cleanup, unlike every provider client, must be idempotent itself."""
+    from tradingagents.graph.trading_graph import TradingAgentsGraph
+
+    class _StrictClosableLLM:
+        def __init__(self):
+            self.calls = 0
+
+        def close(self):
+            self.calls += 1
+            if self.calls > 1:
+                raise RuntimeError("closed more than once")
+
+    llm = _StrictClosableLLM()
+    graph = TradingAgentsGraph.__new__(TradingAgentsGraph)
+    graph.quick_thinking_llm = llm
+    graph.deep_thinking_llm = llm
+    graph._checkpointer_ctx = None
+
+    graph.close()
+    graph.close()
+
+    assert llm.calls == 1
+
+
+@pytest.mark.unit
+def test_graph_close_attempts_every_llm_when_one_close_fails():
+    """A failing Quick cleanup cannot leak the independent Deep LLM."""
+    from tradingagents.graph.trading_graph import TradingAgentsGraph
+
+    class _ClosableLLM:
+        def __init__(self, error=None):
+            self.calls = 0
+            self.error = error
+
+        def close(self):
+            self.calls += 1
+            if self.error is not None:
+                raise self.error
+
+    quick = _ClosableLLM(RuntimeError("simulated quick close failure"))
+    deep = _ClosableLLM()
+    graph = TradingAgentsGraph.__new__(TradingAgentsGraph)
+    graph.quick_thinking_llm = quick
+    graph.deep_thinking_llm = deep
+    graph._checkpointer_ctx = None
+
+    with pytest.raises(RuntimeError, match="simulated quick close failure"):
+        graph.close()
+
+    assert quick.calls == 1
+    assert deep.calls == 1
+
+
+@pytest.mark.unit
 def test_go_key_has_its_own_environment_variable():
     assert get_api_key_env("opencode_go") == "OPENCODE_GO_API_KEY"
 

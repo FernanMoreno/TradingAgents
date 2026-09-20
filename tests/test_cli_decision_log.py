@@ -64,10 +64,12 @@ def test_record_decision_skips_a_run_without_a_decision(tmp_path):
 class _FakeGraph:
     """Records the lifecycle calls run_analysis makes."""
 
-    def __init__(self):
+    def __init__(self, stream_error=None, close_error=None):
         self.calls = []
         self.graph = self
         self.propagator = self
+        self.stream_error = stream_error
+        self.close_error = close_error
 
     def create_run_state(self, ticker, trade_date, asset_type="stock", portfolio=None):
         self.calls.append(("create_run_state", ticker, trade_date))
@@ -93,9 +95,17 @@ class _FakeGraph:
         self.calls.append(("clear_checkpoint",))
 
     def end_checkpoint(self):
-        pass
+        self.calls.append(("end_checkpoint",))
+
+    def close(self):
+        self.end_checkpoint()
+        self.calls.append(("close",))
+        if self.close_error is not None:
+            raise self.close_error
 
     def stream(self, graph_input, **kwargs):
+        if self.stream_error is not None:
+            raise self.stream_error
         yield {"messages": [], "market_report": "M"}
         yield {"messages": [], "final_trade_decision": "Rating: Buy\n\nBuy NVDA."}
 
@@ -164,4 +174,98 @@ def test_cli_run_uses_the_decision_log_like_propagate(tmp_path, monkeypatch):
         # is cleared, matching propagate().
         ("record_decision", "NVDA", "2026-01-10", "Rating: Buy\n\nBuy NVDA."),
         ("clear_checkpoint",),
+        ("end_checkpoint",),
+        ("close",),
     ]
+
+
+@pytest.mark.unit
+def test_cli_closes_the_graph_when_streaming_fails(tmp_path, monkeypatch):
+    """A stream exception must not leave a direct Go transport open."""
+    import cli.main as m
+    from cli.models import AnalystType
+
+    fake = _FakeGraph(RuntimeError("simulated stream failure"))
+    monkeypatch.setattr(m, "TradingAgentsGraph", lambda *a, **k: fake)
+    monkeypatch.setattr(m, "message_buffer", _FakeBuffer())
+    monkeypatch.setattr(m, "create_layout", lambda: None)
+    monkeypatch.setattr(m, "update_display", lambda *a, **k: None)
+    monkeypatch.setattr(m, "Live", _NullLive)
+    monkeypatch.setattr(m, "get_user_selections", lambda: {
+        "ticker": "NVDA", "analysis_date": "2026-01-10",
+        "analysts": [AnalystType.MARKET], "asset_type": "stock",
+    })
+    monkeypatch.setattr(m, "_build_run_config", lambda selections, checkpoint: {
+        "data_cache_dir": str(tmp_path / "cache"), "results_dir": str(tmp_path / "results"),
+    })
+
+    with pytest.raises(RuntimeError, match="simulated stream failure"):
+        m.run_analysis()
+
+    assert fake.calls == [
+        ("create_run_state", "NVDA", "2026-01-10"),
+        ("end_checkpoint",),
+        ("close",),
+    ]
+
+
+@pytest.mark.unit
+def test_cli_preserves_a_stream_error_when_graph_cleanup_fails(tmp_path, monkeypatch):
+    """A secondary cleanup error must not replace the analysis error."""
+    import cli.main as m
+    from cli.models import AnalystType
+
+    fake = _FakeGraph(
+        stream_error=RuntimeError("simulated stream failure"),
+        close_error=RuntimeError("simulated close failure"),
+    )
+    monkeypatch.setattr(m, "TradingAgentsGraph", lambda *a, **k: fake)
+    monkeypatch.setattr(m, "message_buffer", _FakeBuffer())
+    monkeypatch.setattr(m, "create_layout", lambda: None)
+    monkeypatch.setattr(m, "update_display", lambda *a, **k: None)
+    monkeypatch.setattr(m, "Live", _NullLive)
+    monkeypatch.setattr(m, "get_user_selections", lambda: {
+        "ticker": "NVDA", "analysis_date": "2026-01-10",
+        "analysts": [AnalystType.MARKET], "asset_type": "stock",
+    })
+    monkeypatch.setattr(m, "_build_run_config", lambda selections, checkpoint: {
+        "data_cache_dir": str(tmp_path / "cache"), "results_dir": str(tmp_path / "results"),
+    })
+
+    with pytest.raises(RuntimeError, match="simulated stream failure"):
+        m.run_analysis()
+
+    assert fake.calls == [
+        ("create_run_state", "NVDA", "2026-01-10"),
+        ("end_checkpoint",),
+        ("close",),
+    ]
+
+
+@pytest.mark.unit
+def test_cli_closes_the_graph_when_setup_before_stream_fails(tmp_path, monkeypatch):
+    """CLI ownership starts at graph construction, not at stream creation."""
+    import cli.main as m
+    from cli.models import AnalystType
+
+    fake = _FakeGraph()
+    buffer = _FakeBuffer()
+    monkeypatch.setattr(
+        buffer,
+        "init_for_analysis",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("simulated setup failure")),
+    )
+    monkeypatch.setattr(m, "TradingAgentsGraph", lambda *a, **k: fake)
+    monkeypatch.setattr(m, "message_buffer", buffer)
+    monkeypatch.setattr(m, "get_user_selections", lambda: {
+        "ticker": "NVDA", "analysis_date": "2026-01-10",
+        "analysts": [AnalystType.MARKET], "asset_type": "stock",
+    })
+    monkeypatch.setattr(m, "_build_run_config", lambda selections, checkpoint: {
+        "data_cache_dir": str(tmp_path / "cache"), "results_dir": str(tmp_path / "results"),
+    })
+
+    with pytest.raises(RuntimeError, match="simulated setup failure"):
+        m.run_analysis()
+
+    assert fake.calls == [("end_checkpoint",), ("close",)]

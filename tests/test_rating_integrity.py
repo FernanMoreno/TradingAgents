@@ -139,6 +139,9 @@ def test_the_cli_says_when_a_run_produced_no_usable_rating(monkeypatch, tmp_path
         def end_checkpoint(self):
             pass
 
+        def close(self):
+            self.end_checkpoint()
+
         def stream(self, *a, **k):
             yield {"messages": [], "final_trade_decision": REFUSAL}
 

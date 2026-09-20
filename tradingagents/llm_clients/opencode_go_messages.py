@@ -71,6 +71,17 @@ class OpenCodeGoMessages(BaseChatModel):
                 self._owned_client = httpx.Client(timeout=self.timeout)
         return self._owned_client
 
+    def close(self) -> None:
+        """Release the private HTTP transport created by this adapter.
+
+        A caller-supplied ``http_client`` remains caller-owned. Resetting the
+        private reference makes repeated closes harmless and lets an explicitly
+        reused adapter create a fresh client on its next request.
+        """
+        if self._owned_client is not None:
+            self._owned_client.close()
+            self._owned_client = None
+
     @staticmethod
     def _serialize_tool(tool: Any) -> dict[str, Any]:
         """Translate LangChain's OpenAI-shaped tool definition to Messages."""

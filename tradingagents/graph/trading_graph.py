@@ -548,6 +548,38 @@ class TradingAgentsGraph:
             self.graph = self.workflow.compile()
         self._resuming = False
 
+    def close(self) -> None:
+        """Release resources created for this graph without closing injections.
+
+        The graph owns its two LLM instances, but those can intentionally be
+        the same object. Direct OpenCode Go Messages clients close only their
+        private transport, preserving any caller-supplied HTTP client.
+        """
+        errors: list[Exception] = []
+        try:
+            self.end_checkpoint()
+        except Exception as error:
+            errors.append(error)
+
+        closed_llms: set[int] = getattr(self, "_closed_llm_ids", set())
+        self._closed_llm_ids = closed_llms
+        for llm in (
+            getattr(self, "quick_thinking_llm", None),
+            getattr(self, "deep_thinking_llm", None),
+        ):
+            if id(llm) in closed_llms:
+                continue
+            closed_llms.add(id(llm))
+            close = getattr(llm, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception as error:
+                    errors.append(error)
+
+        if errors:
+            raise errors[0]
+
     @contextmanager
     def checkpoint_scope(self, company_name, trade_date, asset_type: str = "stock", portfolio=None):
         """Context-manager form of begin/end_checkpoint for the propagate path."""
