@@ -517,6 +517,82 @@ def test_messages_invokes_go_without_constructing_an_anthropic_client(monkeypatc
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("model", ["qwen3.8-flash", "minimax-m2.7"])
+def test_messages_send_a_protocol_default_max_tokens_when_unset(monkeypatch, model):
+    """Messages models send a bounded Go default without a global config change."""
+    monkeypatch.setenv("OPENCODE_GO_API_KEY", "fake-go-key")
+    requests = []
+
+    def fake_go_gateway(request):
+        requests.append(request)
+        return httpx2.Response(
+            200,
+            request=request,
+            json={
+                "id": "msg_simulated",
+                "type": "message",
+                "role": "assistant",
+                "model": model,
+                "stop_reason": "end_turn",
+                "content": [{"type": "text", "text": "DIRECT_GO_OK"}],
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client = httpx2.Client(transport=httpx2.MockTransport(fake_go_gateway))
+    try:
+        llm = OpenCodeGoClient(
+            model,
+            session_id="simulated-run",
+            http_client=client,
+        ).get_llm()
+
+        assert llm.invoke("simulated provider request").content == "DIRECT_GO_OK"
+    finally:
+        client.close()
+
+    assert json.loads(requests[0].content)["max_tokens"] == 4096
+
+
+@pytest.mark.unit
+def test_messages_preserve_an_explicit_max_tokens(monkeypatch):
+    """An existing caller-supplied limit overrides the Go Messages default."""
+    monkeypatch.setenv("OPENCODE_GO_API_KEY", "fake-go-key")
+    requests = []
+
+    def fake_go_gateway(request):
+        requests.append(request)
+        return httpx2.Response(
+            200,
+            request=request,
+            json={
+                "id": "msg_simulated",
+                "type": "message",
+                "role": "assistant",
+                "model": "qwen3.8-flash",
+                "stop_reason": "end_turn",
+                "content": [{"type": "text", "text": "DIRECT_GO_OK"}],
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client = httpx2.Client(transport=httpx2.MockTransport(fake_go_gateway))
+    try:
+        llm = OpenCodeGoClient(
+            "qwen3.8-flash",
+            session_id="simulated-run",
+            max_tokens=777,
+            http_client=client,
+        ).get_llm()
+
+        assert llm.invoke("simulated provider request").content == "DIRECT_GO_OK"
+    finally:
+        client.close()
+
+    assert json.loads(requests[0].content)["max_tokens"] == 777
+
+
+@pytest.mark.unit
 def test_messages_serializes_tools_and_parses_go_tool_use(monkeypatch):
     """Normal Go tool calls remain LangChain tool calls for analyst routing."""
     monkeypatch.setenv("OPENCODE_GO_API_KEY", "fake-go-key")

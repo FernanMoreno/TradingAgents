@@ -28,6 +28,8 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from pydantic import BaseModel, Field, PrivateAttr
 
+OPENCODE_GO_MESSAGES_DEFAULT_MAX_TOKENS = 4096
+
 
 class OpenCodeGoProtocolError(RuntimeError):
     """A Go response did not satisfy the documented Messages contract."""
@@ -248,8 +250,14 @@ class OpenCodeGoMessages(BaseChatModel):
         payload: dict[str, Any] = {"model": self.model, "messages": serialized_messages}
         if system_parts:
             payload["system"] = "\n\n".join(system_parts)
-        if self.max_tokens is not None:
-            payload["max_tokens"] = self.max_tokens
+        # Go's Messages endpoint requires this field for some compatible
+        # models. Keep the cross-provider configuration opt-in while giving
+        # every direct Messages request a protocol-level bounded default.
+        payload["max_tokens"] = (
+            self.max_tokens
+            if self.max_tokens is not None
+            else OPENCODE_GO_MESSAGES_DEFAULT_MAX_TOKENS
+        )
         if self.temperature is not None:
             payload["temperature"] = self.temperature
         if tools:
