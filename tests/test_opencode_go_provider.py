@@ -551,7 +551,7 @@ def test_messages_send_a_protocol_default_max_tokens_when_unset(monkeypatch, mod
     finally:
         client.close()
 
-    assert json.loads(requests[0].content)["max_tokens"] == 4096
+    assert json.loads(requests[0].content)["max_tokens"] == 8192
 
 
 @pytest.mark.unit

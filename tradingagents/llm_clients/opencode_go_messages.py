@@ -28,7 +28,7 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from pydantic import BaseModel, Field, PrivateAttr
 
-OPENCODE_GO_MESSAGES_DEFAULT_MAX_TOKENS = 4096
+OPENCODE_GO_MESSAGES_DEFAULT_MAX_TOKENS = 8192
 
 
 class OpenCodeGoProtocolError(RuntimeError):

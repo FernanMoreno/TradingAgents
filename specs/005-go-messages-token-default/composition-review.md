@@ -12,7 +12,7 @@
 ## Impact Surface and Neighbors Reviewed
 
 A code-only Graphify extraction over the affected request/configuration/test
-surface found 223 nodes, 426 edges, and 19 communities. It identified
+surface found 159 nodes, 261 edges, and 27 communities. It identified
 `TradingAgentsGraph._get_provider_kwargs`, `OpenCodeGoClient._base_kwargs`,
 `OpenCodeGoClient.get_llm`, and `OpenCodeGoMessages._payload` as the relevant
 route. Source review verified the route:
@@ -21,7 +21,7 @@ route. Source review verified the route:
    configured it.
 2. The Go client preserves that value unchanged and routes reviewed Messages
    models to the direct adapter.
-3. The direct adapter now supplies `4096` only when that forwarded value is
+3. The direct adapter now supplies `8192` only when that forwarded value is
    absent, immediately before its Go HTTP request.
 4. Chat Completions, Responses, tool binding, structured output, terminal
    errors, session identity, and model catalogue selection do not cross this
@@ -34,7 +34,7 @@ route. Source review verified the route:
 | Global config -> graph | Unset `max_tokens` remains absent from generic provider kwargs. | Existing `test_llm_max_tokens.py` coverage passed in the focused suite. |
 | Graph -> Go client | An explicit validated user value remains the value passed to the adapter. | Local request regression sends `777`. |
 | Go client -> Messages adapter | Every reviewed Messages model reaches the same protocol-level default, not a model-specific branch. | Local Qwen/MiniMax regressions and real eight-model smoke passed. |
-| Messages adapter -> Go HTTP | A no-limit request includes `max_tokens: 4096`. | In-process `MockTransport` assertions and real Go Messages responses passed. |
+| Messages adapter -> Go HTTP | A no-limit request includes `max_tokens: 8192`. | In-process `MockTransport` assertions and real Go Messages responses passed. |
 | Adapter -> other providers/protocols | No global configuration or Chat/Responses request shape changes. | Source route review plus 1025-test full suite passed. |
 | Error and retry behavior | No fallback, auth/quota classifier, retry, session, or endpoint change. | Direct diff/source review and existing Go-provider regressions passed. |
 
@@ -45,7 +45,7 @@ default and writes no shared state.
 ## Architecture and Composition Checks
 
 - `ruff check tradingagents/llm_clients/opencode_go_messages.py
-  tests/test_opencode_go_provider.py` passed.
+  tests/test_opencode_go_provider.py tests/test_llm_max_tokens.py` passed.
 - `python -m compileall` for the changed Python files passed.
 - `git diff --check` passed.
 - No Import Linter or equivalent architecture checker is configured.
@@ -54,19 +54,20 @@ default and writes no shared state.
 
 ## Composition and Integration Scenarios
 
-- RED test: no-limit Qwen and MiniMax Messages payloads failed with the expected
-  missing `max_tokens` key before the production edit; an explicit value already
-  passed.
-- GREEN test: local Qwen/MiniMax default and explicit override scenarios passed.
-- Focused simulated suite: **97 passed**.
-- Configuration forwarding regression: **24 passed**, including the existing
-  `opencode_go` path with an explicit `max_tokens` value.
-- Final full simulated suite: **1025 passed, 2 skipped, 22 warnings, 116 subtests
-  passed**. All provider keys were process-overridden with placeholders; the
-  only credential-gated DeepSeek integration test was skipped.
+- RED test: no-limit Qwen and MiniMax Messages payloads failed because they
+  still carried `4096` instead of `8192`; an explicit value already passed.
+- GREEN test: local Qwen/MiniMax default and explicit override scenarios passed
+  (**3 passed**).
+- Focused simulated suite: **98 passed** across the Go provider and the
+  `max_tokens` configuration-forwarding regression.
+- Final full simulated suite: **1025 passed, 2 skipped, 22 warnings, 116
+  subtests passed**. Every known provider credential was process-overridden
+  with a placeholder, so it made no external provider calls; the only
+  credential-gated DeepSeek integration test was skipped.
 - Real non-financial Go smoke: all eight reviewed Messages models returned the
-  fixed connectivity marker with the default left unset in client construction.
-  The probe used no tools, market data, broker, order, or fallback.
+  fixed connectivity marker with `max_tokens` omitted from client construction,
+  thereby using the adapter default of `8192`. The probe used no tools, market
+  data, broker, order, or fallback.
 
 ## Contract and Dependency Assessment
 
@@ -81,8 +82,9 @@ or other disposable infrastructure participates in this payload-only contract.
 - An independent read-only review found no critical or important issue. Its
   one coverage observation — verification of configuration-to-Go forwarding —
   was addressed before the final full suite.
-- `4096` is an intentional finite fallback, so exceptionally long responses may
-  be truncated. Users can set the existing `max_tokens` configuration to their
+- `8192` is an intentional finite fallback. It lowers the chance of truncating
+  long outputs, but it may increase consumption compared with the prior `4096`
+  default; users can set the existing `max_tokens` configuration to their
   required limit.
 - Model retirement or regional availability remains an OpenCode service
   condition and still stops explicitly without a fallback.

@@ -16,3 +16,5 @@
 - [X] T006 Run focused simulated payload and max-token regressions.
 - [X] T007 Run static/full simulated checks and record composition in specs/005-go-messages-token-default/composition-review.md.
 - [X] T008 Review the final diff, make the durable-knowledge decision, verify, commit, and push.
+- [X] T009 Raise the bounded Messages fallback to `8192`, prove its request
+  shape with local fakes and reviewed Go models, and update the contract.

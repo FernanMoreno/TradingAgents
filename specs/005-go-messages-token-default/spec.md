@@ -26,7 +26,7 @@ contains the documented Go-specific default.
 **Acceptance Scenarios**:
 
 1. **Given** a Go Messages client has no explicit output-token limit, **When**
-   it sends a request, **Then** the request includes a finite default of 4096.
+   it sends a request, **Then** the request includes a finite default of 8192.
 2. **Given** the client selects a different Go Messages model, **When** it
    sends a request, **Then** it receives the same protocol-level behavior
    without a model-name branch.
@@ -63,7 +63,7 @@ verify that the local-only request contains that value rather than the default.
 
 - **FR-001**: Every request produced by the direct OpenCode Go Messages
   adapter MUST include `max_tokens`.
-- **FR-002**: The adapter MUST use `4096` only when no explicit client limit
+- **FR-002**: The adapter MUST use `8192` only when no explicit client limit
   is present.
 - **FR-003**: An explicit `max_tokens` value passed through existing
   TradingAgents configuration MUST take precedence over the Go default.
@@ -77,7 +77,7 @@ verify that the local-only request contains that value rather than the default.
 ## Success Criteria
 
 - **SC-001**: Simulated no-limit Qwen and MiniMax Messages requests both carry
-  `max_tokens: 4096`.
+  `max_tokens: 8192`.
 - **SC-002**: A simulated explicit limit reaches the Messages request body
   unchanged.
 - **SC-003**: Existing no-global-limit behavior for other providers remains
@@ -87,7 +87,7 @@ verify that the local-only request contains that value rather than the default.
 
 ## Assumptions
 
-- `4096` is a bounded, useful Go Messages fallback; it is not inferred from
+- `8192` is a bounded, useful Go Messages fallback; it is not inferred from
   the 64-token connectivity probe, which only established that the field must
   be present.
 - Users needing a larger or smaller cap use the existing `max_tokens` setting.
