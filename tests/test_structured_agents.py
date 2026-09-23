@@ -212,6 +212,23 @@ def test_invoke_structured_falls_back_when_result_is_none():
 
 
 @pytest.mark.unit
+def test_invoke_structured_does_not_retry_a_terminal_go_error():
+    """Authentication and quota failures must stop before a plain Go retry."""
+    from tradingagents.agents.utils.structured import invoke_structured_or_freetext
+    from tradingagents.llm_clients.opencode_go_client import OpenCodeGoQuotaError
+
+    structured = MagicMock()
+    structured.invoke.side_effect = OpenCodeGoQuotaError("simulated Go quota")
+    plain = MagicMock()
+
+    with pytest.raises(OpenCodeGoQuotaError, match="simulated Go quota"):
+        invoke_structured_or_freetext(
+            structured, plain, "prompt", render=lambda r: r.rating, agent_name="t"
+        )
+    plain.invoke.assert_not_called()
+
+
+@pytest.mark.unit
 class TestTraderAgent:
     def test_structured_path_produces_rendered_markdown(self):
         captured = {}

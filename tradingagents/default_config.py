@@ -26,6 +26,7 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_GOOGLE_THINKING_LEVEL":   "google_thinking_level",
     "TRADINGAGENTS_OPENAI_REASONING_EFFORT": "openai_reasoning_effort",
     "TRADINGAGENTS_ANTHROPIC_EFFORT":        "anthropic_effort",
+    "TRADINGAGENTS_OPENCODE_GO_SESSION_ID":  "opencode_go_session_id",
 }
 
 
@@ -92,14 +93,17 @@ DEFAULT_CONFIG = _apply_env_overrides({
     "google_thinking_level": None,      # "high", "minimal", etc.
     "openai_reasoning_effort": None,    # "medium", "high", "low"
     "anthropic_effort": None,           # "high", "medium", "low"
+    # Non-secret optional override. A random ID is generated once per graph
+    # run when OpenCode Go is selected and this remains unset.
+    "opencode_go_session_id": None,
     # Sampling temperature, forwarded to every provider when set. None leaves
     # each provider at its own default. Lower values reduce run-to-run
     # variation on models that honor it; reasoning models largely ignore it
     # and no setting makes LLM output bit-identical across runs (see README).
     "temperature": None,
-    # SDK retry budget forwarded to every provider chat client. None leaves each
-    # provider/SDK at its own default (usually 2). Raise it to ride out bursty
-    # 429 throttling on rate-limited deployments instead of aborting a run (#1091).
+    # SDK retry budget forwarded to every provider chat client except OpenCode
+    # Go. Go deliberately makes one request and stops on 429, so it never
+    # retries into a quota/rate-limit response.
     "llm_max_retries": None,
     # Cap on output tokens forwarded to every provider chat client. None leaves
     # each provider at its own default. Set it to bound a model that emits

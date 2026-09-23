@@ -1,8 +1,10 @@
 import datetime
+import logging
 import os
 import sys
 import time
 from collections import deque
+from contextlib import contextmanager
 from functools import wraps
 from pathlib import Path
 
@@ -57,6 +59,26 @@ from tradingagents.portfolio import load_portfolio
 from tradingagents.reporting import write_report_tree
 
 console = Console()
+logger = logging.getLogger(__name__)
+
+
+def _close_graph_after_failed_analysis(graph) -> None:
+    """Attempt cleanup without replacing the error that already occurred."""
+    try:
+        graph.close()
+    except BaseException:
+        logger.exception("Could not release graph resources after a failed analysis.")
+
+
+@contextmanager
+def _close_graph_on_error(graph, cleanup_complete):
+    """Protect a CLI-owned graph from exceptions before streaming begins."""
+    try:
+        yield
+    except BaseException:
+        if not cleanup_complete():
+            _close_graph_after_failed_analysis(graph)
+        raise
 
 # prompt_toolkit's win32 output module is importable only on Windows (it asserts
 # the platform at import time), so gate on the platform rather than catching the
@@ -1068,67 +1090,81 @@ def run_analysis(checkpoint: bool | None = None, portfolio=None):
         debug=True,
         callbacks=[stats_handler],
     )
+    graph_closed = False
 
-    # Initialize message buffer with selected analysts
-    message_buffer.init_for_analysis(selected_analyst_keys)
+    try:
+        # Initialize message buffer with selected analysts
+        message_buffer.init_for_analysis(selected_analyst_keys)
 
-    # Track start time for elapsed display
-    start_time = time.time()
+        # Track start time for elapsed display
+        start_time = time.time()
 
-    # Create result directory
-    results_dir = _run_directory(config, selections["ticker"], selections["analysis_date"])
-    results_dir.mkdir(parents=True, exist_ok=True)
-    report_dir = results_dir / "reports"
-    report_dir.mkdir(parents=True, exist_ok=True)
-    log_file = results_dir / "message_tool.log"
-    log_file.touch(exist_ok=True)
+        # Create result directory
+        results_dir = _run_directory(config, selections["ticker"], selections["analysis_date"])
+        results_dir.mkdir(parents=True, exist_ok=True)
+        report_dir = results_dir / "reports"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        log_file = results_dir / "message_tool.log"
+        log_file.touch(exist_ok=True)
 
-    def save_message_decorator(obj, func_name):
-        func = getattr(obj, func_name)
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            func(*args, **kwargs)
-            timestamp, message_type, content = obj.messages[-1]
-            content = content.replace("\n", " ")  # Replace newlines with spaces
-            with open(log_file, "a", encoding="utf-8") as f:
-                f.write(f"{timestamp} [{message_type}] {content}\n")
-        return wrapper
+        def save_message_decorator(obj, func_name):
+            func = getattr(obj, func_name)
 
-    def save_tool_call_decorator(obj, func_name):
-        func = getattr(obj, func_name)
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            func(*args, **kwargs)
-            timestamp, tool_name, args = obj.tool_calls[-1]
-            args_str = ", ".join(f"{k}={v}" for k, v in args.items())
-            with open(log_file, "a", encoding="utf-8") as f:
-                f.write(f"{timestamp} [Tool Call] {tool_name}({args_str})\n")
-        return wrapper
+            @wraps(func)
+            def wrapper(*args, **kwargs):
+                func(*args, **kwargs)
+                timestamp, message_type, content = obj.messages[-1]
+                content = content.replace("\n", " ")  # Replace newlines with spaces
+                with open(log_file, "a", encoding="utf-8") as f:
+                    f.write(f"{timestamp} [{message_type}] {content}\n")
 
-    def save_report_section_decorator(obj, func_name):
-        func = getattr(obj, func_name)
-        @wraps(func)
-        def wrapper(section_name, content):
-            func(section_name, content)
-            if section_name in obj.report_sections and obj.report_sections[section_name] is not None:
-                content = obj.report_sections[section_name]
-                if content:
-                    file_name = f"{section_name}.md"
-                    text = "\n".join(str(item) for item in content) if isinstance(content, list) else content
-                    with open(report_dir / file_name, "w", encoding="utf-8") as f:
-                        f.write(text)
-        return wrapper
+            return wrapper
 
-    message_buffer.add_message = save_message_decorator(message_buffer, "add_message")
-    message_buffer.add_tool_call = save_tool_call_decorator(message_buffer, "add_tool_call")
-    message_buffer.update_report_section = save_report_section_decorator(message_buffer, "update_report_section")
+        def save_tool_call_decorator(obj, func_name):
+            func = getattr(obj, func_name)
 
-    # Now start the display layout
-    layout = create_layout()
+            @wraps(func)
+            def wrapper(*args, **kwargs):
+                func(*args, **kwargs)
+                timestamp, tool_name, args = obj.tool_calls[-1]
+                args_str = ", ".join(f"{k}={v}" for k, v in args.items())
+                with open(log_file, "a", encoding="utf-8") as f:
+                    f.write(f"{timestamp} [Tool Call] {tool_name}({args_str})\n")
+
+            return wrapper
+
+        def save_report_section_decorator(obj, func_name):
+            func = getattr(obj, func_name)
+
+            @wraps(func)
+            def wrapper(section_name, content):
+                func(section_name, content)
+                if section_name in obj.report_sections and obj.report_sections[section_name] is not None:
+                    content = obj.report_sections[section_name]
+                    if content:
+                        file_name = f"{section_name}.md"
+                        text = "\n".join(str(item) for item in content) if isinstance(content, list) else content
+                        with open(report_dir / file_name, "w", encoding="utf-8") as f:
+                            f.write(text)
+
+            return wrapper
+
+        message_buffer.add_message = save_message_decorator(message_buffer, "add_message")
+        message_buffer.add_tool_call = save_tool_call_decorator(message_buffer, "add_tool_call")
+        message_buffer.update_report_section = save_report_section_decorator(message_buffer, "update_report_section")
+
+        # Now start the display layout
+        layout = create_layout()
+    except BaseException:
+        _close_graph_after_failed_analysis(graph)
+        graph_closed = True
+        raise
 
     # The alternate screen keeps a layout taller than the window from redrawing
     # by scrolling; the final report prints after this block, on the normal screen.
-    with Live(layout, refresh_per_second=4, screen=True):
+    with _close_graph_on_error(graph, lambda: graph_closed), Live(
+        layout, refresh_per_second=4, screen=True
+    ):
         # Initial display
         update_display(layout, stats_handler=stats_handler, start_time=start_time)
 
@@ -1295,9 +1331,20 @@ def run_analysis(checkpoint: bool | None = None, portfolio=None):
             graph.clear_checkpoint_on_success(
                 selections["ticker"], selections["analysis_date"], selections["asset_type"], portfolio
             )
-        finally:
-            # Always restore the plain uncheckpointed graph, even on failure.
-            graph.end_checkpoint()
+        except BaseException:
+            # Cleanup must not hide the analysis failure that caused this path.
+            try:
+                _close_graph_after_failed_analysis(graph)
+            finally:
+                graph_closed = True
+            raise
+        else:
+            # A successful run reports a cleanup failure instead of silently
+            # retaining its graph-owned transports.
+            try:
+                graph.close()
+            finally:
+                graph_closed = True
 
         # Update all agent statuses to completed
         for agent in message_buffer.agent_status:

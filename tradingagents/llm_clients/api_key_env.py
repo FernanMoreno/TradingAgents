@@ -35,6 +35,9 @@ PROVIDER_API_KEY_ENV: dict[str, str | None] = {
     "kimi":       "MOONSHOT_API_KEY",
     "groq":       "GROQ_API_KEY",
     "nvidia":     "NVIDIA_API_KEY",
+    # Independent Go subscription credential. Never reuse keys saved by
+    # OpenCode itself or another provider.
+    "opencode_go": "OPENCODE_GO_API_KEY",
     # Local runtimes do not authenticate.
     "ollama":     None,
     # Generic OpenAI-compatible endpoint: the client reads this when set (keyed

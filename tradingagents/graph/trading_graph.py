@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -33,6 +34,9 @@ from tradingagents.dataflows.config import set_config
 from tradingagents.dataflows.utils import get_current_date, safe_ticker_component
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.llm_clients import create_llm_client
+from tradingagents.llm_clients.opencode_go_models import (
+    is_opencode_go_quick_model_compatible,
+)
 from tradingagents.reporting import write_report_tree
 
 from .checkpointer import checkpoint_step, clear_checkpoint, get_checkpointer, thread_id
@@ -90,6 +94,31 @@ def _coerce_max_tokens(value):
     return n
 
 
+def _validate_opencode_go_quick_model(config: dict[str, Any]) -> None:
+    """Reject a reviewed Go Quick model that cannot bind analyst tools.
+
+    Unknown IDs are intentionally left to OpenCodeGoClient, which owns the
+    strict protocol and model-identifier validation for the provider.
+    """
+    provider = config.get("llm_provider")
+    if not isinstance(provider, str) or provider.lower() != "opencode_go":
+        return
+    model = config.get("quick_think_llm")
+    if not isinstance(model, str) or is_opencode_go_quick_model_compatible(model):
+        return
+
+    # Keep the provider's terminal configuration error type without importing
+    # its client module for every non-Go graph construction.
+    from tradingagents.llm_clients.opencode_go_client import OpenCodeGoConfigurationError
+
+    raise OpenCodeGoConfigurationError(
+        f"OpenCode Go quick_think_llm {model!r} does not support the ordinary tools "
+        "required by quick-thinking analyst roles. Choose a tool-capable Go model "
+        "for quick_think_llm; this model remains valid as deep_think_llm. "
+        "The run stopped before initialization; no fallback was used."
+    )
+
+
 class TradingAgentsGraph:
     """Main class that orchestrates the trading agents framework."""
 
@@ -111,6 +140,8 @@ class TradingAgentsGraph:
         self.debug = debug
         self.config = config or DEFAULT_CONFIG
         self.callbacks = callbacks or []
+
+        _validate_opencode_go_quick_model(self.config)
 
         # Update the interface's config
         set_config(self.config)
@@ -199,6 +230,18 @@ class TradingAgentsGraph:
             if effort:
                 kwargs["effort"] = effort
 
+        elif provider == "opencode_go":
+            # Both LLMs are created once and then shared by the full graph, so
+            # this ID remains stable through analysts, debates, managers, risk,
+            # reflection, and final result processing.
+            session_id = self.config.get("opencode_go_session_id")
+            if not session_id:
+                session_id = getattr(self, "_opencode_go_session_id", None)
+            if not session_id:
+                session_id = uuid.uuid4().hex
+            self._opencode_go_session_id = str(session_id)
+            kwargs["opencode_go_session_id"] = self._opencode_go_session_id
+
         # Sampling temperature is cross-provider: forward it whenever set.
         # float() here so a value coming from a TRADINGAGENTS_TEMPERATURE env
         # string ("0.2") works the same as a programmatic float.
@@ -206,10 +249,10 @@ class TradingAgentsGraph:
         if temperature is not None and temperature != "":
             kwargs["temperature"] = float(temperature)
 
-        # SDK retry budget is cross-provider. Forward it only when explicitly set
-        # so each provider keeps its own default (usually 2) otherwise (#1091).
+        # SDK retry budget is cross-provider except for OpenCode Go: a Go 429
+        # must stop immediately rather than consuming further retry requests.
         max_retries = self.config.get("llm_max_retries")
-        if max_retries is not None and max_retries != "":
+        if provider != "opencode_go" and max_retries is not None and max_retries != "":
             kwargs["max_retries"] = _coerce_max_retries(max_retries)
 
         # Output-token cap is cross-provider, but Gemini names it
@@ -504,6 +547,38 @@ class TradingAgentsGraph:
             self._checkpointer_ctx = None
             self.graph = self.workflow.compile()
         self._resuming = False
+
+    def close(self) -> None:
+        """Release resources created for this graph without closing injections.
+
+        The graph owns its two LLM instances, but those can intentionally be
+        the same object. Direct OpenCode Go Messages clients close only their
+        private transport, preserving any caller-supplied HTTP client.
+        """
+        errors: list[Exception] = []
+        try:
+            self.end_checkpoint()
+        except Exception as error:
+            errors.append(error)
+
+        closed_llms: set[int] = getattr(self, "_closed_llm_ids", set())
+        self._closed_llm_ids = closed_llms
+        for llm in (
+            getattr(self, "quick_thinking_llm", None),
+            getattr(self, "deep_thinking_llm", None),
+        ):
+            if id(llm) in closed_llms:
+                continue
+            closed_llms.add(id(llm))
+            close = getattr(llm, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception as error:
+                    errors.append(error)
+
+        if errors:
+            raise errors[0]
 
     @contextmanager
     def checkpoint_scope(self, company_name, trade_date, asset_type: str = "stock", portfolio=None):

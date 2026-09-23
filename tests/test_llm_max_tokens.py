@@ -60,7 +60,9 @@ def test_not_forwarded_when_unset():
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("provider", ["openai", "anthropic", "deepseek", "openai_compatible"])
+@pytest.mark.parametrize(
+    "provider", ["openai", "anthropic", "deepseek", "openai_compatible", "opencode_go"]
+)
 def test_forwarded_as_max_tokens_for_non_google(provider):
     kwargs = _bare_graph({"llm_provider": provider, "max_tokens": 8192})._get_provider_kwargs()
     assert kwargs["max_tokens"] == 8192

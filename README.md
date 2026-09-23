@@ -164,6 +164,7 @@ export MISTRAL_API_KEY=...         # Mistral
 export MOONSHOT_API_KEY=...        # Kimi (Moonshot)
 export GROQ_API_KEY=...            # Groq
 export NVIDIA_API_KEY=...          # NVIDIA NIM
+export OPENCODE_GO_API_KEY=...     # OpenCode Go subscription API key
 export FRED_API_KEY=...            # FRED macro data (free, optional)
 export ALPHA_VANTAGE_API_KEY=...   # Alpha Vantage
 ```
@@ -175,6 +176,54 @@ For AWS Bedrock, install the extra with `pip install ".[bedrock]"`, set `llm_pro
 For local models, configure Ollama with `llm_provider: "ollama"`. The default endpoint is `http://localhost:11434/v1`; set `OLLAMA_BASE_URL` to point at a remote `ollama-serve`. Pull models with `ollama pull <name>`, and pick "Custom model ID" in the CLI for any model not listed by default.
 
 For any other OpenAI-compatible server (vLLM, LM Studio, llama.cpp, or a custom relay), use `llm_provider: "openai_compatible"` and set the endpoint via `backend_url` (or `TRADINGAGENTS_LLM_BACKEND_URL`), e.g. `http://localhost:8000/v1` for vLLM or `http://localhost:1234/v1` for LM Studio. The model is whatever your server serves. No key is needed for local servers; set `OPENAI_COMPATIBLE_API_KEY` when the endpoint requires one.
+
+### OpenCode Go
+
+OpenCode Go is a direct selectable provider, not a wrapper around the OpenCode CLI.
+Set `OPENCODE_GO_API_KEY` yourself (TradingAgents never reads OpenCode's saved
+credentials), choose `llm_provider: "opencode_go"`, and select models from the
+Go picker. Every analyst, debate, manager, risk review, reflection, and final
+processing call uses that one provider selection.
+
+OpenCode documents different protocols for different Go models. TradingAgents maps
+each reviewed model to its documented Chat Completions, Responses, or Messages
+endpoint and rejects unknown IDs rather than guessing. The Messages branch sends
+HTTP directly to Go; it does not instantiate the Anthropic SDK or select the
+Anthropic provider. It sends the honest user-agent
+`tradingagents/0.5.0` and one stable `x-opencode-session` per run. It does not fall
+back to another endpoint, model, or provider after an error. A Go quota or rate-limit
+response stops the run after that one request; `TRADINGAGENTS_LLM_MAX_RETRIES` is
+intentionally not applied to Go.
+
+Messages-model capabilities are explicit. `minimax-m3` has simulated coverage for
+ordinary tools and forced schema tools, so it can produce typed manager results.
+`qwen3.8-flash` supports ordinary tools but does not receive forced schema tools:
+the existing manager/trader fallback makes a plain Go request instead. Other Messages
+models remain conservative until their tool behavior is reviewed. Messages models
+without reviewed ordinary-tool support are offered only for the Deep role: Quick
+always drives tool-enabled analyst work. A stale environment, preference, or library
+setting that names one for Quick stops before graph initialization, without a request,
+provider change, Zen use, or fallback. This never changes provider; use `minimax-m3`
+for both Quick and Deep roles if typed results are required at every stage.
+
+PowerShell example (use your own key; do not paste it into source files):
+
+```powershell
+$env:OPENCODE_GO_API_KEY = "your-go-api-key"
+$env:TRADINGAGENTS_LLM_PROVIDER = "opencode_go"
+$env:TRADINGAGENTS_QUICK_THINK_LLM = "minimax-m3"
+$env:TRADINGAGENTS_DEEP_THINK_LLM = "minimax-m3"
+tradingagents
+```
+
+The Go documentation describes the service for coding agents and requests that clients
+send their own user agent and a stable session ID. TradingAgents complies by identifying
+itself as `tradingagents/0.5.0`; it neither impersonates a validated client nor blocks
+the selected Go request in code. The user remains responsible for ensuring their actual
+workload complies with their OpenCode account terms. Go's console also has an account-
+level “Use balance” setting that can continue service with Zen balance after Go limits;
+disable that setting there if no paid continuation is wanted. TradingAgents itself never
+switches endpoint, key, model, or provider.
 
 Alternatively, copy `.env.example` to `.env` and fill in your keys:
 ```bash
@@ -218,7 +267,7 @@ An interface will appear showing results as they load, letting you track the age
 
 ### Implementation Details
 
-We built TradingAgents with LangGraph to ensure flexibility and modularity. The framework supports multiple LLM providers: OpenAI, Google, Anthropic, xAI, DeepSeek, Qwen (Alibaba DashScope, international and China endpoints), GLM (Zhipu), MiniMax (global + China), OpenRouter, Ollama for local models, and Azure OpenAI for enterprise.
+We built TradingAgents with LangGraph to ensure flexibility and modularity. The framework supports multiple LLM providers: OpenAI, Google, Anthropic, xAI, DeepSeek, Qwen (Alibaba DashScope, international and China endpoints), GLM (Zhipu), MiniMax (global + China), OpenRouter, OpenCode Go, Ollama for local models, and Azure OpenAI for enterprise.
 
 ### Python Usage
 
@@ -242,9 +291,9 @@ from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.default_config import DEFAULT_CONFIG
 
 config = DEFAULT_CONFIG.copy()
-config["llm_provider"] = "openai"        # e.g. openai, google, anthropic, deepseek, groq, ollama; openai_compatible covers any OpenAI-compatible endpoint (vLLM, LM Studio, llama.cpp, ...)
-config["deep_think_llm"] = "gpt-5.6"      # Model for complex reasoning
-config["quick_think_llm"] = "gpt-5.6-luna" # Model for quick tasks
+config["llm_provider"] = "opencode_go"    # e.g. opencode_go, openai, google, anthropic, deepseek, groq, ollama; openai_compatible covers arbitrary OpenAI-compatible endpoints
+config["deep_think_llm"] = "kimi-k3"      # Model for complex reasoning
+config["quick_think_llm"] = "glm-5.3-flash" # Model for quick tasks
 config["max_debate_rounds"] = 2
 
 ta = TradingAgentsGraph(debug=True, config=config)
