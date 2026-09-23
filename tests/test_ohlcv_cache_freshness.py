@@ -8,7 +8,6 @@ day (#1330).
 from __future__ import annotations
 
 import os
-import time
 
 import pandas as pd
 import pytest
@@ -19,15 +18,17 @@ NOW = pd.Timestamp("2026-07-18 12:00")
 STALE = su.OHLCV_CACHE_TTL_SECONDS + 60
 
 
+def _stamp(path, ts):
+    """Set ``path``'s mtime to the wall-clock ``ts``, read back in local time as
+    the cache does. A naive ``pd.Timestamp.timestamp()`` would be taken as UTC."""
+    t = ts.to_pydatetime().timestamp()
+    os.utime(path, (t, t))
+
+
 def _write(tmp_path, name="AAPL-YFin-data.csv", age_seconds=0.0, last_date="2026-07-17"):
     f = tmp_path / name
     pd.DataFrame({"Date": [last_date], "Close": [100.0]}).to_csv(f, index=False)
-    # _cache_is_fresh reads a local timestamp with fromtimestamp(), so build
-    # the mtime in the same local-time convention. Timestamp.timestamp() treats
-    # this naive fixture as UTC on some platforms, which made TTL tests depend
-    # on the runner's timezone.
-    written = time.mktime((NOW - pd.Timedelta(seconds=age_seconds)).timetuple())
-    os.utime(f, (written, written))
+    _stamp(f, NOW - pd.Timedelta(seconds=age_seconds))
     return f
 
 
@@ -104,7 +105,7 @@ def test_one_cache_file_per_symbol_across_days(tmp_path, monkeypatch):
         monkeypatch.setattr(su.pd.Timestamp, "today", staticmethod(lambda now=now: now))
         su.load_ohlcv("AAPL", "2026-07-17")
         written = list(tmp_path.glob("AAPL-*.csv"))
-        os.utime(written[0], (now.timestamp(), now.timestamp()))
+        _stamp(written[0], now)
 
     assert len(downloads) == 3, "each new day refetches"
     assert [p.name for p in tmp_path.iterdir()] == ["AAPL-YFin-data.csv"]

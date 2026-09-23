@@ -72,9 +72,9 @@ def _apply_env_overrides(config: dict) -> dict:
 
 DEFAULT_CONFIG = _apply_env_overrides({
     "project_dir": os.path.abspath(os.path.join(os.path.dirname(__file__), ".")),
-    "results_dir": os.getenv("TRADINGAGENTS_RESULTS_DIR", os.path.join(_TRADINGAGENTS_HOME, "logs")),
-    "data_cache_dir": os.getenv("TRADINGAGENTS_CACHE_DIR", os.path.join(_TRADINGAGENTS_HOME, "cache")),
-    "memory_log_path": os.getenv("TRADINGAGENTS_MEMORY_LOG_PATH", os.path.join(_TRADINGAGENTS_HOME, "memory", "trading_memory.md")),
+    "results_dir": os.getenv("TRADINGAGENTS_RESULTS_DIR") or os.path.join(_TRADINGAGENTS_HOME, "logs"),
+    "data_cache_dir": os.getenv("TRADINGAGENTS_CACHE_DIR") or os.path.join(_TRADINGAGENTS_HOME, "cache"),
+    "memory_log_path": os.getenv("TRADINGAGENTS_MEMORY_LOG_PATH") or os.path.join(_TRADINGAGENTS_HOME, "memory", "trading_memory.md"),
     # Optional cap on the number of resolved memory log entries. When set,
     # the oldest resolved entries are pruned once this limit is exceeded.
     # Pending entries are never pruned. None disables rotation entirely.
@@ -172,6 +172,7 @@ DEFAULT_CONFIG = _apply_env_overrides({
         ".AX":  "^AXJO",       # Australia (ASX 200)
         ".SS":  "000001.SS",   # Shanghai (SSE Composite)
         ".SZ":  "399001.SZ",   # Shenzhen (SZSE Component)
+        ".SA":  "^BVSP",       # B3 Brazil (Ibovespa)
         "":     "SPY",         # default for US-listed tickers (no suffix)
     },
 })
